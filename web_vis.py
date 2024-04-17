@@ -623,7 +623,7 @@ class AppWindow:
     def _on_menu_open(self):
         dlg = gui.FileDialog(gui.FileDialog.OPEN, "Choose file to load",
                              self.window.theme)
-        dlg.add_filter('.bin')
+        dlg.add_filter('.bin', 'Binary Point Cloud Data (.bin)')
         dlg.add_filter(
             ".ply .stl .fbx .obj .off .gltf .glb",
             "Triangle mesh files (.ply, .stl, .fbx, .obj, .off, "
@@ -712,6 +712,12 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
 
+    def load_point_cloud(bin_path, max_value=20):
+        points = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
+        # Filter points where any of x, y, or z exceeds max_value
+        points = points[(np.abs(points[:, :3]) <= max_value).all(axis=1)]
+        return points
+
     def load(self, path):
         self._scene.scene.clear_geometry()
 
@@ -724,6 +730,12 @@ class AppWindow:
         if mesh is None:
             print("[Info]", path, "appears to be a point cloud")
             cloud = None
+            if path.endswith('.bin'):
+                points = self.load_point_cloud(path)
+                cloud = o3d.geometry.PointCloud()
+                cloud.points = o3d.utility.Vector3dVector(points[:, :3])
+                if points.shape[1] == 4:  # Check if there are colors or intensities
+                    cloud.colors = o3d.utility.Vector3dVector(points[:, 3:4])
             try:
                 cloud = o3d.io.read_point_cloud(path)
             except Exception:
