@@ -20,16 +20,7 @@ category_colors = {
         'Car': [1, 0, 0],  # Red
         'Pedestrian': [0, 0, 1],  # Blue
         'Misc': [0, 1, 0]
-    }
-
-def create_colormap(points, max_distance):
-    colors = np.zeros((points.shape[0], 3))
-    for i, point in enumerate(points):
-        # Normalize the X-coordinate to the range [-1, 1] and then scale to [0, 1]
-        x_normalized = (point[0] / max_distance + 1) / 2
-        # Apply the colormap: Blue for negative X, Red for positive X, White for near 0
-        colors[i] = [x_normalized, 0.5 * (1 - abs(x_normalized - 0.5)), 1 - x_normalized]
-    return colors
+}
 
 def load_bounding_boxes(txt_path):
     boxes = []
@@ -180,6 +171,8 @@ class Settings:
         self.bg_color = gui.Color(1, 1, 1)
         self.show_skybox = False
         self.show_axes = False
+        self.show_colormap = True
+        self.show_label = True
         self.use_ibl = True
         self.use_sun = True
         self.new_ibl_name = None  # clear to None after loading
@@ -336,6 +329,16 @@ class AppWindow:
         self._show_axes.set_on_checked(self._on_show_axes)
         view_ctrls.add_fixed(separation_height)
         view_ctrls.add_child(self._show_axes)
+
+        self._show_colormap = gui.Checkbox("Color Map (Red-Blue)")
+        self._show_colormap.checked = True
+        self._show_colormap.set_on_checked(self._on_show_colormap)
+        view_ctrls.add_child(self._show_colormap)
+
+        self._show_label = gui.Checkbox("Label Category")
+        self._show_label.checked = True
+        self._show_label.set_on_checked(self._on_show_label)
+        view_ctrls.add_child(self._show_label)
 
         self._profiles = gui.Combobox()
         for name in sorted(Settings.LIGHTING_PROFILES.keys()):
@@ -600,6 +603,43 @@ class AppWindow:
         self.settings.show_axes = show
         self._apply_settings()
 
+    def _update_point_cloud_display(self):
+        if self.current_point_cloud:
+            points = np.asarray(self.current_point_cloud.points)
+            if self.settings.show_colormap:
+                # Apply colormap to all points initially
+                colormap = self.create_colormap(points)
+            else:
+                # Use a default gray color if colormap is disabled
+                colormap = np.tile([0.5, 0.5, 0.5], (len(points), 1))
+
+            # Ensure category-specific colors are maintained within bounding boxes
+            if self.settings.show_label:
+                for name, obb in self.bounding_boxes:
+                    # Indices of points within this bounding box
+                    indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(points))
+                    # Apply the specific category color to points within the bounding box
+                    for idx in indices:
+                        colormap[idx] = category_colors.get(name.split('_')[1], [0.5, 0.5, 0.5])
+
+            # Update the point cloud colors
+            self.current_point_cloud.colors = o3d.utility.Vector3dVector(colormap)
+            self._on_point_filter(self._point_filter.int_value)
+            # self._scene.scene.clear_geometry()
+            # self._scene.scene.add_geometry("__model__", self.current_point_cloud, self.settings.material)
+            #
+            # # Re-add bounding boxes to ensure they are visible
+            # for name, obb in self.bounding_boxes:
+            #     self._scene.scene.add_geometry(name, obb, self.settings.material)
+
+    def _on_show_colormap(self, show):
+        self.settings.show_colormap = show
+        self._update_point_cloud_display()
+
+    def _on_show_label(self, show):
+        self.settings.show_label = show
+        self._update_point_cloud_display()
+
     def _on_use_ibl(self, use):
         self.settings.use_ibl = use
         self._profiles.selected_text = Settings.CUSTOM_PROFILE_NAME
@@ -781,6 +821,17 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
 
+    def create_colormap(self, points):
+        max_distance = 25
+        colors = np.tile([0.5, 0.5, 0.5], (len(points), 1))
+        if self.settings.show_colormap:
+            for i, point in enumerate(points):
+                # Normalize the X-coordinate to the range [-1, 1] and then scale to [0, 1]
+                x_normalized = (point[0] / max_distance + 1) / 2
+                # Apply the colormap: Blue for negative X, Red for positive X, White for near 0
+                colors[i] = [x_normalized, 0.5 * (1 - abs(x_normalized - 0.5)), 1 - x_normalized]
+        return colors
+
     def load(self, path):
         self._scene.scene.clear_geometry()
         self.bounding_boxes = []
@@ -798,7 +849,7 @@ class AppWindow:
                 points = np.fromfile(path, dtype=np.float32).reshape(-1, 4)
                 cloud = o3d.geometry.PointCloud()
                 cloud.points = o3d.utility.Vector3dVector(points[:, :3])
-                colormap = create_colormap(points[:, :3], self._point_filter.int_value)
+                colormap = self.create_colormap(points[:, :3])
 
                 # Labeled Boxes Load
                 filename = os.path.splitext(os.path.basename(path))[0]
@@ -812,8 +863,9 @@ class AppWindow:
                     obb_name = f"box_{box[-1]}"
                     self.bounding_boxes.append((obb_name, obb))
                     self._scene.scene.add_geometry(obb_name, obb, self.settings.material)
-                    for idx in indices:
-                        colormap[idx] = color
+                    if self.settings.show_label:
+                        for idx in indices:
+                            colormap[idx] = color
                 cloud.colors = o3d.utility.Vector3dVector(colormap)
             else:
                 try:
