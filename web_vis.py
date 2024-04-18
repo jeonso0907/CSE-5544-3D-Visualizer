@@ -16,6 +16,45 @@ import sys
 
 isMacOS = (platform.system() == "Darwin")
 
+category_colors = {
+        'Car': [1, 0, 0],  # Red
+        'Pedestrian': [0, 0, 1],  # Blue
+        'Misc': [0, 1, 0]
+    }
+
+def create_colormap(points, max_distance):
+    colors = np.zeros((points.shape[0], 3))
+    for i, point in enumerate(points):
+        # Normalize the X-coordinate to the range [-1, 1] and then scale to [0, 1]
+        x_normalized = (point[0] / max_distance + 1) / 2
+        # Apply the colormap: Blue for negative X, Red for positive X, White for near 0
+        colors[i] = [x_normalized, 0.5 * (1 - abs(x_normalized - 0.5)), 1 - x_normalized]
+    return colors
+
+def load_bounding_boxes(txt_path):
+    boxes = []
+    with open(txt_path, 'r') as file:
+        for line in file:
+            data = line.split()
+            category = data[0]  # Get the category of the object
+            h, w, l = map(float, data[8:11])
+            y, z, x = map(float, data[11:14])
+            rotation_y = float(data[14])
+            boxes.append((x, -y, -z, h, w, l, rotation_y, category))
+    return boxes
+
+def create_bounding_box(box):
+    x, y, z, h, w, l, ry, _ = box  # Ignore category here
+    z = z + h / 2  # Adjust the center for z-coordinate
+    bbox = o3d.geometry.OrientedBoundingBox(center=[x, y, z], R=o3d.geometry.get_rotation_matrix_from_axis_angle([0, ry, 0]), extent=[w, h, l])
+    return bbox
+
+def get_path_until_data(full_path):
+    # Find the index of 'data/'
+    index = full_path.find('data/') + 5  # add 5 to include 'data/' in the result
+    # Extract the part of the path up to and including 'data/'
+    path_until_data = full_path[:index]
+    return path_until_data
 
 class Settings:
     UNLIT = "defaultUnlit"
@@ -199,6 +238,7 @@ class AppWindow:
     ]
 
     def __init__(self, width, height):
+        self.bounding_boxes = None
         self.settings = Settings()
         resource_path = gui.Application.instance.resource_path
         self.settings.new_ibl_name = resource_path + "/" + AppWindow.DEFAULT_IBL
@@ -383,7 +423,8 @@ class AppWindow:
         self._point_size.set_on_value_changed(self._on_point_size)
         # Point Filter
         self._point_filter = gui.Slider(gui.Slider.INT)
-        self._point_filter.set_limits(1, 50)
+        self._point_filter.int_value = 100
+        self._point_filter.set_limits(1, 100)
         self._point_filter.set_on_value_changed(self._on_point_filter)
 
         grid = gui.VGrid(2, 0.25 * em)
@@ -466,6 +507,8 @@ class AppWindow:
                                      self._on_menu_toggle_settings_panel)
         w.set_on_menu_item_activated(AppWindow.MENU_ABOUT, self._on_menu_about)
         # ----
+
+        self.current_point_cloud = None
 
         self._apply_settings()
 
@@ -618,8 +661,34 @@ class AppWindow:
         self._apply_settings()
 
     def _on_point_filter(self, filter_range):
-        pass
+        if self.current_point_cloud:
+            points = np.asarray(self.current_point_cloud.points)
+            original_colors = np.asarray(self.current_point_cloud.colors)
 
+            filter_mask = (points[:, 0] ** 2 + points[:, 1] ** 2 + points[:, 2] ** 2) <= filter_range ** 2
+            filtered_points = points[filter_mask]
+            filtered_colors = original_colors[filter_mask]
+
+            new_cloud = o3d.geometry.PointCloud()
+            new_cloud.points = o3d.utility.Vector3dVector(filtered_points)
+            new_cloud.colors = o3d.utility.Vector3dVector(filtered_colors)
+
+            if self.current_point_cloud.has_normals():
+                normals = np.asarray(self.current_point_cloud.normals)
+                new_cloud.normals = o3d.utility.Vector3dVector(normals[:len(filtered_points)])
+
+            self._scene.scene.clear_geometry()
+            self._scene.scene.add_geometry("__model__", new_cloud, self.settings.material)
+
+            for name, obb in self.bounding_boxes:
+                self._scene.scene.add_geometry(name, obb, self.settings.material)
+                # Check and color points within this bounding box
+                indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(filtered_points))
+                for idx in indices:
+                    filtered_colors[idx] = category_colors.get(name.split('_')[1], [0.5, 0.5,0.5])  # Apply category color or default to gray
+
+                # Update cloud colors with possibly updated colors inside bounding boxes
+            new_cloud.colors = o3d.utility.Vector3dVector(filtered_colors)
     def _on_menu_open(self):
         dlg = gui.FileDialog(gui.FileDialog.OPEN, "Choose file to load",
                              self.window.theme)
@@ -712,15 +781,9 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
 
-    def load_point_cloud(bin_path, max_value=20):
-        points = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
-        # Filter points where any of x, y, or z exceeds max_value
-        points = points[(np.abs(points[:, :3]) <= max_value).all(axis=1)]
-        return points
-
     def load(self, path):
         self._scene.scene.clear_geometry()
-
+        self.bounding_boxes = []
         geometry = None
         geometry_type = o3d.io.read_file_geometry_type(path)
 
@@ -731,20 +794,38 @@ class AppWindow:
             print("[Info]", path, "appears to be a point cloud")
             cloud = None
             if path.endswith('.bin'):
-                points = self.load_point_cloud(path)
+                # Point Cloud Load
+                points = np.fromfile(path, dtype=np.float32).reshape(-1, 4)
                 cloud = o3d.geometry.PointCloud()
                 cloud.points = o3d.utility.Vector3dVector(points[:, :3])
-                if points.shape[1] == 4:  # Check if there are colors or intensities
-                    cloud.colors = o3d.utility.Vector3dVector(points[:, 3:4])
-            try:
-                cloud = o3d.io.read_point_cloud(path)
-            except Exception:
-                pass
+                colormap = create_colormap(points[:, :3], self._point_filter.int_value)
+
+                # Labeled Boxes Load
+                filename = os.path.splitext(os.path.basename(path))[0]
+                before_path = get_path_until_data(path)
+                boxes = load_bounding_boxes(f'{before_path}/Label/{filename[-6:]}.txt')
+                for box in boxes:
+                    obb = create_bounding_box(box)
+                    category = box[-1]
+                    color = category_colors.get(category, [0.5, 0.5, 0.5])  # Default to gray if category not found
+                    indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(points[:, :3]))
+                    obb_name = f"box_{box[-1]}"
+                    self.bounding_boxes.append((obb_name, obb))
+                    self._scene.scene.add_geometry(obb_name, obb, self.settings.material)
+                    for idx in indices:
+                        colormap[idx] = color
+                cloud.colors = o3d.utility.Vector3dVector(colormap)
+            else:
+                try:
+                    cloud = o3d.io.read_point_cloud(path)
+                except Exception:
+                    pass
             if cloud is not None:
                 print("[Info] Successfully read", path)
                 if not cloud.has_normals():
                     cloud.estimate_normals()
                 cloud.normalize_normals()
+                self.current_point_cloud = cloud
                 geometry = cloud
             else:
                 print("[WARNING] Failed to read points", path)
