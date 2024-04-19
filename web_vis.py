@@ -355,6 +355,11 @@ class AppWindow:
         self._show_colormap.set_on_checked(self._on_show_colormap)
         view_ctrls.add_child(self._show_colormap)
 
+        colormap_proxy = gui.WidgetProxy()
+        self._show_depth_colormap_image = gui.ImageWidget("colormap_images/color_map.png")
+        def display_colormap(path):
+
+
         self._show_depth_colormap = gui.Checkbox("Color Map (Depth)")
         self._show_depth_colormap.checked = False
         self._show_depth_colormap.set_on_checked(self._on_show_depth_colormap)
@@ -448,6 +453,7 @@ class AppWindow:
         self._material_color.set_on_value_changed(self._on_material_color)
         self._point_size = gui.Slider(gui.Slider.INT)
         self._point_size.set_limits(1, 10)
+        self._point_size.set_on_value_changed(self._on_point_size)
         self._point_size.set_on_value_changed(self._on_point_size)
         # Point Filter
         self._point_filter = gui.Slider(gui.Slider.INT)
@@ -927,9 +933,6 @@ class AppWindow:
                         for idx in indices:
                             colormap[idx] = color
                 cloud.colors = o3d.utility.Vector3dVector(colormap)
-
-                # Colormap Image Load
-                o3d.io.write_image()
             else:
                 try:
                     cloud = o3d.io.read_point_cloud(path)
