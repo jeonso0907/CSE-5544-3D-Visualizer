@@ -169,9 +169,11 @@ class Settings:
     def __init__(self):
         self.mouse_model = gui.SceneWidget.Controls.ROTATE_CAMERA
         self.bg_color = gui.Color(1, 1, 1)
+        self.car_color = gui.Color(1, 0, 0)
         self.show_skybox = False
         self.show_axes = False
-        self.show_colormap = True
+        self.show_colormap = False
+        self.show_depth_colormap = False
         self.show_label = True
         self.use_ibl = True
         self.use_sun = True
@@ -320,10 +322,28 @@ class AppWindow:
         self._bg_color = gui.ColorEdit()
         self._bg_color.set_on_value_changed(self._on_bg_color)
 
+        self._car_color = gui.ColorEdit()
+        self._car_color.color_value = gui.Color(1, 0, 0)
+        self._car_color.set_on_value_changed(self._on_car_color)
+
+        self._pedestrian_color = gui.ColorEdit()
+        self._pedestrian_color.color_value = gui.Color(0, 0, 1)
+        self._pedestrian_color.set_on_value_changed(self._on_pedestrian_color)
+
         grid = gui.VGrid(2, 0.25 * em)
         grid.add_child(gui.Label("BG Color"))
         grid.add_child(self._bg_color)
         view_ctrls.add_child(grid)
+
+        grid2 = gui.VGrid(2, 0.25 * em)
+        grid2.add_child(gui.Label("Car Color"))
+        grid2.add_child(self._car_color)
+        view_ctrls.add_child(grid2)
+
+        grid3 = gui.VGrid(2, 0.25 * em)
+        grid3.add_child(gui.Label("Person Color"))
+        grid3.add_child(self._pedestrian_color)
+        view_ctrls.add_child(grid3)
 
         self._show_axes = gui.Checkbox("Show axes")
         self._show_axes.set_on_checked(self._on_show_axes)
@@ -331,9 +351,14 @@ class AppWindow:
         view_ctrls.add_child(self._show_axes)
 
         self._show_colormap = gui.Checkbox("Color Map (Red-Blue)")
-        self._show_colormap.checked = True
+        self._show_colormap.checked = False
         self._show_colormap.set_on_checked(self._on_show_colormap)
         view_ctrls.add_child(self._show_colormap)
+
+        self._show_depth_colormap = gui.Checkbox("Color Map (Depth)")
+        self._show_depth_colormap.checked = False
+        self._show_depth_colormap.set_on_checked(self._on_show_depth_colormap)
+        view_ctrls.add_child(self._show_depth_colormap)
 
         self._show_label = gui.Checkbox("Label Category")
         self._show_label.checked = True
@@ -521,6 +546,7 @@ class AppWindow:
             self.settings.bg_color.blue, self.settings.bg_color.alpha
         ]
         self._scene.scene.set_background(bg_color)
+
         self._scene.scene.show_skybox(self.settings.show_skybox)
         self._scene.scene.show_axes(self.settings.show_axes)
         if self.settings.new_ibl_name is not None:
@@ -595,6 +621,16 @@ class AppWindow:
         self.settings.bg_color = new_color
         self._apply_settings()
 
+    def _on_car_color(self, new_color):
+        self.settings.car_color = new_color
+        category_colors['Car'] = [new_color.red, new_color.green, new_color.blue]
+        self._update_point_cloud_display()
+
+    def _on_pedestrian_color(self, new_color):
+        self.settings.pedestrian_color = new_color
+        category_colors['Pedestrian'] = [new_color.red, new_color.green, new_color.blue]
+        self._update_point_cloud_display()
+
     def _on_show_skybox(self, show):
         self.settings.show_skybox = show
         self._apply_settings()
@@ -608,7 +644,9 @@ class AppWindow:
             points = np.asarray(self.current_point_cloud.points)
             if self.settings.show_colormap:
                 # Apply colormap to all points initially
-                colormap = self.create_colormap(points)
+                colormap = self.create_colormap(points, 'red-blue')
+            elif self.settings.show_depth_colormap:
+                colormap = self.create_colormap(points, 'depth')
             else:
                 # Use a default gray color if colormap is disabled
                 colormap = np.tile([0.5, 0.5, 0.5], (len(points), 1))
@@ -634,6 +672,10 @@ class AppWindow:
 
     def _on_show_colormap(self, show):
         self.settings.show_colormap = show
+        self._update_point_cloud_display()
+
+    def _on_show_depth_colormap(self, show):
+        self.settings.show_depth_colormap = show
         self._update_point_cloud_display()
 
     def _on_show_label(self, show):
@@ -821,15 +863,33 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
 
-    def create_colormap(self, points):
+    def create_colormap(self, points, type=None, rgb_list=None):
         max_distance = 25
         colors = np.tile([0.5, 0.5, 0.5], (len(points), 1))
-        if self.settings.show_colormap:
+
+        if self.settings.show_colormap and type == 'red-blue':
             for i, point in enumerate(points):
                 # Normalize the X-coordinate to the range [-1, 1] and then scale to [0, 1]
                 x_normalized = (point[0] / max_distance + 1) / 2
                 # Apply the colormap: Blue for negative X, Red for positive X, White for near 0
                 colors[i] = [x_normalized, 0.5 * (1 - abs(x_normalized - 0.5)), 1 - x_normalized]
+        elif self.settings.show_depth_colormap and type == 'depth':
+            depths = [10, 20, 30, 40, 50]
+            depth_colors = [[1, 1, 1], [1, 0.5, 0.5], [1, 0.3, 0.3], [1, 0.15, 0.15], [1, 0, 0]]
+            depth_colors = [[1, 1, 1], [1, 0.5, 0.5], [1, 0.3, 0.3], [1, 0.15, 0.15], [1, 0, 0]]
+            points = np.asarray(self.current_point_cloud.points)
+            point_distances = np.sqrt(np.sum(points ** 2, axis=1))
+
+            for i, depth in enumerate(depths):
+                min_range = (depths[i - 1] if i > 0 else 0)
+                max_range = (depth if i != 4 else 100000)
+
+                min_mask = point_distances >= min_range
+                max_mask = point_distances < max_range
+
+                filter_mask = np.logical_and(min_mask, max_mask)
+                colors[filter_mask] = depth_colors[4 - i]
+
         return colors
 
     def load(self, path):
@@ -867,6 +927,9 @@ class AppWindow:
                         for idx in indices:
                             colormap[idx] = color
                 cloud.colors = o3d.utility.Vector3dVector(colormap)
+
+                # Colormap Image Load
+                o3d.io.write_image()
             else:
                 try:
                     cloud = o3d.io.read_point_cloud(path)
