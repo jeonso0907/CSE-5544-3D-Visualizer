@@ -10,18 +10,13 @@ import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
+
+from scipy.spatial import distance
 import os
 import platform
 import sys
 
 isMacOS = (platform.system() == "Darwin")
-
-category_colors = {
-    'Car': [1, 0, 0],  # Red
-    'Pedestrian': [0, 0, 1],  # Blue
-    'Misc': [0, 1, 0]
-}
-
 
 def load_bounding_boxes(txt_path):
     boxes = []
@@ -40,8 +35,8 @@ def create_bounding_box(box):
     x, y, z, h, w, l, ry, _ = box  # Ignore category here
     z = z + h / 2  # Adjust the center for z-coordinate
     bbox = o3d.geometry.OrientedBoundingBox(center=[x, y, z],
-                                            R=o3d.geometry.get_rotation_matrix_from_axis_angle([0, ry, 0]),
-                                            extent=[w, h, l])
+                                            R=o3d.geometry.get_rotation_matrix_from_axis_angle([0, 0, -ry]),
+                                            extent=[w, l, h])
     return bbox
 
 
@@ -175,7 +170,6 @@ class Settings:
     def __init__(self):
         self.mouse_model = gui.SceneWidget.Controls.ROTATE_CAMERA
         self.bg_color = gui.Color(1, 1, 1)
-        self.car_color = gui.Color(1, 0, 0)
         self.show_skybox = False
         self.show_axes = False
         self.show_colormap = False
@@ -240,6 +234,10 @@ class AppWindow:
 
     def __init__(self, width, height):
         self.bounding_boxes = None
+        self.category_colors = {}
+        self.category_checked = {}
+        self.custom_colormap = []
+
         self.settings = Settings()
         resource_path = gui.Application.instance.resource_path
         self.settings.new_ibl_name = resource_path + "/" + AppWindow.DEFAULT_IBL
@@ -328,28 +326,20 @@ class AppWindow:
         self._bg_color = gui.ColorEdit()
         self._bg_color.set_on_value_changed(self._on_bg_color)
 
-        self._car_color = gui.ColorEdit()
-        self._car_color.color_value = gui.Color(1, 0, 0)
-        self._car_color.set_on_value_changed(self._on_car_color)
-
-        self._pedestrian_color = gui.ColorEdit()
-        self._pedestrian_color.color_value = gui.Color(0, 0, 1)
-        self._pedestrian_color.set_on_value_changed(self._on_pedestrian_color)
-
         grid = gui.VGrid(2, 0.25 * em)
         grid.add_child(gui.Label("BG Color"))
         grid.add_child(self._bg_color)
         view_ctrls.add_child(grid)
 
-        grid2 = gui.VGrid(2, 0.25 * em)
-        grid2.add_child(gui.Label("Car Color"))
-        grid2.add_child(self._car_color)
-        view_ctrls.add_child(grid2)
-
-        grid3 = gui.VGrid(2, 0.25 * em)
-        grid3.add_child(gui.Label("Person Color"))
-        grid3.add_child(self._pedestrian_color)
-        view_ctrls.add_child(grid3)
+        # grid2 = gui.VGrid(2, 0.25 * em)
+        # grid2.add_child(gui.Label("Car Color"))
+        # grid2.add_child(self._car_color)
+        # view_ctrls.add_child(grid2)
+        #
+        # grid3 = gui.VGrid(2, 0.25 * em)
+        # grid3.add_child(gui.Label("Person Color"))
+        # grid3.add_child(self._pedestrian_color)
+        # view_ctrls.add_child(grid3)
 
         self._show_axes = gui.Checkbox("Show axes")
         self._show_axes.set_on_checked(self._on_show_axes)
@@ -435,8 +425,8 @@ class AppWindow:
         advanced.add_child(gui.Label("Sun (Directional light)"))
         advanced.add_child(grid)
 
-        self._settings_panel.add_fixed(separation_height)
-        self._settings_panel.add_child(advanced)
+        # self._settings_panel.add_fixed(separation_height)
+        # self._settings_panel.add_child(advanced)
 
         material_settings = gui.CollapsableVert("Material settings", 0,
                                                 gui.Margins(em, 0, 0, 0))
@@ -483,6 +473,24 @@ class AppWindow:
         self._settings_panel.add_child(material_settings)
         self._settings_panel.add_fixed(separation_height)
         self._settings_panel.add_child(self._colormap_proxy)
+
+        # List for 3D bounding boxes with RGB for each
+        label_3d_settings = gui.CollapsableVert("3D Labels", 0, gui.Margins(em, 0, 0, 0))
+        label_tree = gui.TreeView()
+        label_3d_settings.add_child(label_tree)
+
+        # lv.set_items[("Car", "Pedestrian", "Misc")]
+        self._settings_panel.add_fixed(separation_height)
+        self._settings_panel.add_child(label_3d_settings)
+
+        custom_colormap_settings = gui.CollapsableVert("Custom Colormap", 0, gui.Margins(em, 0, 0, 0))
+        custom_colormap_tree = gui.TreeView()
+        custom_colormap_settings.add_child(custom_colormap_tree)
+
+        self._settings_panel.add_fixed(separation_height)
+        self._settings_panel.add_child(custom_colormap_settings)
+
+
         # ----
 
         # Normally our user interface can be children of all one layout (usually
@@ -605,7 +613,7 @@ class AppWindow:
         # the grandchildren.
         r = self.window.content_rect
         self._scene.frame = r
-        width = 17 * layout_context.theme.font_size
+        width = 20 * layout_context.theme.font_size
         height = min(
             r.height,
             self._settings_panel.calc_preferred_size(
@@ -632,14 +640,12 @@ class AppWindow:
         self.settings.bg_color = new_color
         self._apply_settings()
 
-    def _on_car_color(self, new_color):
-        self.settings.car_color = new_color
-        category_colors['Car'] = [new_color.red, new_color.green, new_color.blue]
+    def _on_label_checked_changed(self, label, is_checked):
+        self.category_checked[label] = is_checked
         self._update_point_cloud_display()
 
-    def _on_pedestrian_color(self, new_color):
-        self.settings.pedestrian_color = new_color
-        category_colors['Pedestrian'] = [new_color.red, new_color.green, new_color.blue]
+    def _on_label_color_changed(self, label, color):
+        self.category_colors[label] = [color.red, color.green, color.blue]
         self._update_point_cloud_display()
 
     def _on_show_skybox(self, show):
@@ -665,11 +671,14 @@ class AppWindow:
             # Ensure category-specific colors are maintained within bounding boxes
             if self.settings.show_label:
                 for name, obb in self.bounding_boxes:
-                    # Indices of points within this bounding box
-                    indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(points))
-                    # Apply the specific category color to points within the bounding box
-                    for idx in indices:
-                        colormap[idx] = category_colors.get(name.split('_')[1], [0.5, 0.5, 0.5])
+                    if self.category_checked[name.split('_')[1]]:
+                        # Indices of points within this bounding box
+                        indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(points))
+                        # Apply the specific category color to points within the bounding box
+                        for idx in indices:
+                            colormap[idx] = self.category_colors.get(name.split('_')[1], [0.5, 0.5, 0.5])
+                    else:
+                        continue
 
             # Update the point cloud colors
             self.current_point_cloud.colors = o3d.utility.Vector3dVector(colormap)
@@ -682,6 +691,10 @@ class AppWindow:
             #     self._scene.scene.add_geometry(name, obb, self.settings.material)
 
     def _on_show_colormap(self, show):
+        if show:
+            self._show_depth_colormap.enabled = False
+        else:
+            self._show_depth_colormap.enabled = True
         self.settings.show_colormap = show
         self._update_point_cloud_display()
 
@@ -705,8 +718,12 @@ class AppWindow:
         self.window.set_needs_layout()
 
     def _on_show_depth_colormap(self, show):
+        if show:
+            self._show_colormap.enabled = False
+        else:
+            self._show_colormap.enabled = True
         self.settings.show_depth_colormap = show
-        self._display_colormap()
+        #self._display_colormap()
         self._update_point_cloud_display()
 
     def _on_show_label(self, show):
@@ -798,7 +815,7 @@ class AppWindow:
                 # Check and color points within this bounding box
                 indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(filtered_points))
                 for idx in indices:
-                    filtered_colors[idx] = category_colors.get(name.split('_')[1], [0.5, 0.5,
+                    filtered_colors[idx] = self.category_colors.get(name.split('_')[1], [0.5, 0.5,
                                                                                     0.5])  # Apply category color or default to gray
 
                 # Update cloud colors with possibly updated colors inside bounding boxes
@@ -907,27 +924,53 @@ class AppWindow:
                 # Apply the colormap: Blue for negative X, Red for positive X, White for near 0
                 colors[i] = [x_normalized, 0.5 * (1 - abs(x_normalized - 0.5)), 1 - x_normalized]
         elif self.settings.show_depth_colormap and type == 'depth':
-            depths = [10, 20, 30, 40, 50]
-            depth_colors = [[1, 1, 1], [1, 0.5, 0.5], [1, 0.3, 0.3], [1, 0.15, 0.15], [1, 0, 0]]
-            depth_colors = [[1, 1, 1], [1, 0.5, 0.5], [1, 0.3, 0.3], [1, 0.15, 0.15], [1, 0, 0]]
+            custom_colormap_settings = self._settings_panel.get_children()[9]
+            custom_colormap_tree = custom_colormap_settings.get_children()[0]
+            custom_colormap_tree.clear()
+
+            # Calculate the Euclidean distance between the reference point and all points in the PCD
+            ref_point = np.array([0, 0, 0])
             points = np.asarray(self.current_point_cloud.points)
-            point_distances = np.sqrt(np.sum(points ** 2, axis=1))
+            distances = np.array([distance.euclidean(point, ref_point)
+                                  for point in points])
 
-            for i, depth in enumerate(depths):
-                min_range = (depths[i - 1] if i > 0 else 0)
-                max_range = (depth if i != 4 else 100000)
+            # Find the closest point (smallest distance)
+            closest_point_idx = np.argmin(distances)
+            min_d = distances[closest_point_idx]
 
-                min_mask = point_distances >= min_range
-                max_mask = point_distances < max_range
+            # Find the farthest point (largest distance)
+            farthest_point_idx = np.argmax(distances)
+            max_d = distances[farthest_point_idx]
+
+            # Create a colormap based on the distances
+
+            raw_distances = np.linspace(min_d, max_d, num=5)
+            distance_ranges = [round(d, 1) for d in raw_distances]
+            i = 0
+            for color, d in zip(self.custom_colormap, distance_ranges[:-1]):
+                custom_colormap_row = gui.ColormapTreeCell(d, gui.Color(color[0], color[1], color[2]), None, None)
+                custom_colormap_tree.add_item(0, custom_colormap_row)
+
+                min_range = d - 1
+                max_range = (distance_ranges[i + 1] + 1 if i < 3 else 100000)
+
+                min_mask = distances >= min_range
+                max_mask = distances < max_range
 
                 filter_mask = np.logical_and(min_mask, max_mask)
-                colors[filter_mask] = depth_colors[4 - i]
+                colors[filter_mask] = self.custom_colormap[3 - i]
+                i += 1
 
         return colors
 
     def load(self, path):
         self._scene.scene.clear_geometry()
         self.bounding_boxes = []
+        self.custom_colormap = [[1, 1, 1], [1, 0.7, 0.7], [1, 0.3, 0.3], [1, 0, 0]]
+
+        self.category_colors = {}
+        self.category_checked = {}
+
         geometry = None
         geometry_type = o3d.io.read_file_geometry_type(path)
 
@@ -951,12 +994,17 @@ class AppWindow:
                 for box in boxes:
                     obb = create_bounding_box(box)
                     category = box[-1]
-                    color = category_colors.get(category, [0.5, 0.5, 0.5])  # Default to gray if category not found
+                    if self.category_colors.get(category) is None:
+                        self.category_colors[category] = [0.5, 0.5, 0.5]
+                        self.category_checked[category] = False
+
+                    color = self.category_colors.get(category, [0.5, 0.5, 0.5])  # Default to gray if category not found
                     indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(points[:, :3]))
                     obb_name = f"box_{box[-1]}"
                     self.bounding_boxes.append((obb_name, obb))
                     self._scene.scene.add_geometry(obb_name, obb, self.settings.material)
-                    if self.settings.show_label:
+                    is_checked = self.category_checked[category]
+                    if is_checked is not None and is_checked:
                         for idx in indices:
                             colormap[idx] = color
                 cloud.colors = o3d.utility.Vector3dVector(colormap)
@@ -988,6 +1036,23 @@ class AppWindow:
                 self._scene.setup_camera(60, bounds, bounds.get_center())
             except Exception as e:
                 print(e)
+
+        # Label 3D Settings
+        label_3d_settings = self._settings_panel.get_children()[7]
+        label_tree = label_3d_settings.get_children()[0]
+        label_tree.clear()
+
+        default_colors = [[1,0,0], [0,1,0], [0,0,1], [1,1,0], [1,0,1], [0,1,1]]
+        color_num = 0
+        for name, color in self.category_colors.items():
+            if color_num < len(default_colors):
+                color = default_colors[color_num]
+                self.category_colors[name] = color
+                color_num += 1
+            lv = gui.LUTTreeCell(name, False, gui.Color(color[0], color[1], color[2]),
+                                 lambda is_checked, n=name: self._on_label_checked_changed(n, is_checked),
+                                 lambda new_color, n=name: self._on_label_color_changed(n, new_color))
+            label_tree.add_item(0, lv)
 
     def export_image(self, path, width, height):
 
