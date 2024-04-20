@@ -17,10 +17,11 @@ import sys
 isMacOS = (platform.system() == "Darwin")
 
 category_colors = {
-        'Car': [1, 0, 0],  # Red
-        'Pedestrian': [0, 0, 1],  # Blue
-        'Misc': [0, 1, 0]
+    'Car': [1, 0, 0],  # Red
+    'Pedestrian': [0, 0, 1],  # Blue
+    'Misc': [0, 1, 0]
 }
+
 
 def load_bounding_boxes(txt_path):
     boxes = []
@@ -34,11 +35,15 @@ def load_bounding_boxes(txt_path):
             boxes.append((x, -y, -z, h, w, l, rotation_y, category))
     return boxes
 
+
 def create_bounding_box(box):
     x, y, z, h, w, l, ry, _ = box  # Ignore category here
     z = z + h / 2  # Adjust the center for z-coordinate
-    bbox = o3d.geometry.OrientedBoundingBox(center=[x, y, z], R=o3d.geometry.get_rotation_matrix_from_axis_angle([0, ry, 0]), extent=[w, h, l])
+    bbox = o3d.geometry.OrientedBoundingBox(center=[x, y, z],
+                                            R=o3d.geometry.get_rotation_matrix_from_axis_angle([0, ry, 0]),
+                                            extent=[w, h, l])
     return bbox
+
 
 def get_path_until_data(full_path):
     # Find the index of 'data/'
@@ -46,6 +51,7 @@ def get_path_until_data(full_path):
     # Extract the part of the path up to and including 'data/'
     path_until_data = full_path[:index]
     return path_until_data
+
 
 class Settings:
     UNLIT = "defaultUnlit"
@@ -355,14 +361,12 @@ class AppWindow:
         self._show_colormap.set_on_checked(self._on_show_colormap)
         view_ctrls.add_child(self._show_colormap)
 
-        colormap_proxy = gui.WidgetProxy()
-        self._show_depth_colormap_image = gui.ImageWidget("colormap_images/color_map.png")
-        def display_colormap(path):
-
+        self._colormap_proxy = gui.WidgetProxy()
 
         self._show_depth_colormap = gui.Checkbox("Color Map (Depth)")
         self._show_depth_colormap.checked = False
         self._show_depth_colormap.set_on_checked(self._on_show_depth_colormap)
+
         view_ctrls.add_child(self._show_depth_colormap)
 
         self._show_label = gui.Checkbox("Label Category")
@@ -398,7 +402,6 @@ class AppWindow:
         self._ibl_map = gui.Combobox()
         for ibl in glob.glob(gui.Application.instance.resource_path +
                              "/*_ibl.ktx"):
-
             self._ibl_map.add_item(os.path.basename(ibl[:-8]))
         self._ibl_map.selected_text = AppWindow.DEFAULT_IBL
         self._ibl_map.set_on_selection_changed(self._on_new_ibl)
@@ -478,6 +481,8 @@ class AppWindow:
 
         self._settings_panel.add_fixed(separation_height)
         self._settings_panel.add_child(material_settings)
+        self._settings_panel.add_fixed(separation_height)
+        self._settings_panel.add_child(self._colormap_proxy)
         # ----
 
         # Normally our user interface can be children of all one layout (usually
@@ -586,7 +591,7 @@ class AppWindow:
         self._sun_dir.vector_value = self.settings.sun_dir
         self._sun_color.color_value = self.settings.sun_color
         self._material_prefab.enabled = (
-            self.settings.material.shader == Settings.LIT)
+                self.settings.material.shader == Settings.LIT)
         c = gui.Color(self.settings.material.base_color[0],
                       self.settings.material.base_color[1],
                       self.settings.material.base_color[2],
@@ -680,8 +685,28 @@ class AppWindow:
         self.settings.show_colormap = show
         self._update_point_cloud_display()
 
+    def _click_colormap(self, event):
+        if event.type == gui.MouseEvent.Type.BUTTON_DOWN:
+            self.settings.show_colormap = False
+            self._colormap_proxy.set_widget(None)
+            self.window.set_needs_layout()
+            return gui.ImageWidget.EventCallbackResult.HANDLED
+        return gui.ImageWidget.EventCallbackResult.IGNORED
+
+    def _display_colormap(self):
+        if self.settings.show_depth_colormap:
+            base_path = os.path.dirname(os.path.realpath(__file__))
+            colormap_image = gui.ImageWidget(base_path + "/colormap_images/color_map.png")
+            colormap_image.background_color = gui.Color(0.8, 0.8, 0.8)
+            colormap_image.set_on_mouse(self._click_colormap)
+            self._colormap_proxy.set_widget(colormap_image)
+        else:
+            self._colormap_proxy.set_widget(None)
+        self.window.set_needs_layout()
+
     def _on_show_depth_colormap(self, show):
         self.settings.show_depth_colormap = show
+        self._display_colormap()
         self._update_point_cloud_display()
 
     def _on_show_label(self, show):
@@ -773,10 +798,12 @@ class AppWindow:
                 # Check and color points within this bounding box
                 indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(filtered_points))
                 for idx in indices:
-                    filtered_colors[idx] = category_colors.get(name.split('_')[1], [0.5, 0.5,0.5])  # Apply category color or default to gray
+                    filtered_colors[idx] = category_colors.get(name.split('_')[1], [0.5, 0.5,
+                                                                                    0.5])  # Apply category color or default to gray
 
                 # Update cloud colors with possibly updated colors inside bounding boxes
             new_cloud.colors = o3d.utility.Vector3dVector(filtered_colors)
+
     def _on_menu_open(self):
         dlg = gui.FileDialog(gui.FileDialog.OPEN, "Choose file to load",
                              self.window.theme)
