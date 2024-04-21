@@ -237,6 +237,7 @@ class AppWindow:
         self.category_colors = {}
         self.category_checked = {}
         self.custom_colormap = []
+        self.custom_colormap_range = []
 
         self.settings = Settings()
         resource_path = gui.Application.instance.resource_path
@@ -913,6 +914,19 @@ class AppWindow:
     def _on_about_ok(self):
         self.window.close_dialog()
 
+    def _on_custom_range_change(self, new_range, section):
+        curr_ranges = self.custom_colormap_range
+        prev_range_color = self.custom_colormap[section - 1] if section > 0 else [0.5, 0.5, 0.5]
+        curr_range_color = self.custom_colormap[section]
+        prev_range = curr_ranges[section - 1] if section > 0 else 0
+        next_range = curr_ranges[section + 1] if section < 3 else 100000
+
+        # Update the previous range color
+
+    def _on_custom_colormap_change(self, color, section):
+        self.custom_colormap[section] = [color.red, color.green, color.blue]
+        self._update_point_cloud_display()
+
     def create_colormap(self, points, type=None, rgb_list=None):
         max_distance = 25
         colors = np.tile([0.5, 0.5, 0.5], (len(points), 1))
@@ -945,10 +959,14 @@ class AppWindow:
             # Create a colormap based on the distances
 
             raw_distances = np.linspace(min_d, max_d, num=5)
-            distance_ranges = [round(d, 1) for d in raw_distances]
+            self.custom_colormap_range = [round(d, 1) for d in raw_distances]
+            distance_ranges = self.custom_colormap_range
             i = 0
             for color, d in zip(self.custom_colormap, distance_ranges[:-1]):
-                custom_colormap_row = gui.ColormapTreeCell(d, gui.Color(color[0], color[1], color[2]), None, None)
+                custom_colormap_row = gui.ColormapTreeCell(d, gui.Color(color[0], color[1], color[2]),
+                                                           None,
+                                                           None)
+
                 custom_colormap_tree.add_item(0, custom_colormap_row)
 
                 min_range = d - 1
@@ -958,7 +976,7 @@ class AppWindow:
                 max_mask = distances < max_range
 
                 filter_mask = np.logical_and(min_mask, max_mask)
-                colors[filter_mask] = self.custom_colormap[3 - i]
+                colors[filter_mask] = self.custom_colormap[i]
                 i += 1
 
         return colors
@@ -966,7 +984,7 @@ class AppWindow:
     def load(self, path):
         self._scene.scene.clear_geometry()
         self.bounding_boxes = []
-        self.custom_colormap = [[1, 1, 1], [1, 0.7, 0.7], [1, 0.3, 0.3], [1, 0, 0]]
+        self.custom_colormap = [[1, 0, 0], [1, 0.3, 0.3], [1, 0.7, 0.7], [1, 1, 1]]
 
         self.category_colors = {}
         self.category_checked = {}
