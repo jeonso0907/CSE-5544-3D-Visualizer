@@ -684,12 +684,6 @@ class AppWindow:
             # Update the point cloud colors
             self.current_point_cloud.colors = o3d.utility.Vector3dVector(colormap)
             self._on_point_filter(self._point_filter.int_value)
-            # self._scene.scene.clear_geometry()
-            # self._scene.scene.add_geometry("__model__", self.current_point_cloud, self.settings.material)
-            #
-            # # Re-add bounding boxes to ensure they are visible
-            # for name, obb in self.bounding_boxes:
-            #     self._scene.scene.add_geometry(name, obb, self.settings.material)
 
     def _on_show_colormap(self, show):
         if show:
@@ -923,9 +917,17 @@ class AppWindow:
 
         # Update the previous range color
 
-    def _on_custom_colormap_change(self, color, section):
-        self.custom_colormap[section] = [color.red, color.green, color.blue]
-        self._update_point_cloud_display()
+    def _on_custom_colormap_change(self, curr_color, new_color, section):
+        self.custom_colormap[section] = [new_color.red, new_color.green, new_color.blue]
+        points = self.current_point_cloud
+
+        points_color = np.array(points.colors)
+        selected_points_color = np.array(curr_color)
+        filtered_index = (points_color == selected_points_color).all(axis=1)
+        points_color[filtered_index] = np.array([new_color.red, new_color.green, new_color.blue])
+        self.current_point_cloud.colors = o3d.utility.Vector3dVector(points_color)
+        self._on_point_filter(self._point_filter.int_value)
+
 
     def create_colormap(self, points, type=None, rgb_list=None):
         max_distance = 25
@@ -965,7 +967,8 @@ class AppWindow:
             for color, d in zip(self.custom_colormap, distance_ranges[:-1]):
                 custom_colormap_row = gui.ColormapTreeCell(d, gui.Color(color[0], color[1], color[2]),
                                                            None,
-                                                           None)
+                                                           lambda new_color, curr_color=color, s=i:
+                                                           self._on_custom_colormap_change(curr_color, new_color, s))
 
                 custom_colormap_tree.add_item(0, custom_colormap_row)
 
