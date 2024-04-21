@@ -810,8 +810,7 @@ class AppWindow:
                 # Check and color points within this bounding box
                 indices = obb.get_point_indices_within_bounding_box(o3d.utility.Vector3dVector(filtered_points))
                 for idx in indices:
-                    filtered_colors[idx] = self.category_colors.get(name.split('_')[1], [0.5, 0.5,
-                                                                                    0.5])  # Apply category color or default to gray
+                    filtered_colors[idx] = self.category_colors.get(name.split('_')[1], [0.5, 0.5, 0.5])
 
                 # Update cloud colors with possibly updated colors inside bounding boxes
             new_cloud.colors = o3d.utility.Vector3dVector(filtered_colors)
@@ -917,7 +916,8 @@ class AppWindow:
 
         # Update the previous range color
 
-    def _on_custom_colormap_change(self, curr_color, new_color, section):
+    def _on_custom_colormap_change(self, new_color, section):
+        curr_color = self.custom_colormap[section]
         self.custom_colormap[section] = [new_color.red, new_color.green, new_color.blue]
         points = self.current_point_cloud
 
@@ -967,8 +967,8 @@ class AppWindow:
             for color, d in zip(self.custom_colormap, distance_ranges[:-1]):
                 custom_colormap_row = gui.ColormapTreeCell(d, gui.Color(color[0], color[1], color[2]),
                                                            None,
-                                                           lambda new_color, curr_color=color, s=i:
-                                                           self._on_custom_colormap_change(curr_color, new_color, s))
+                                                           lambda new_color, s=i:
+                                                           self._on_custom_colormap_change(new_color, s))
 
                 custom_colormap_tree.add_item(0, custom_colormap_row)
 
